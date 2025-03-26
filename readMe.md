@@ -49,4 +49,20 @@ cd ~/mistral-model
 
 curl -L -o mistral-7b.Q4_K_M.gguf \
 https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistral-7b-instruct-v0.1.Q4_K_M.gguf
+
 ```
+
+## (Optional)
+
+## Generate Custom Regional Language Dataset Using Google Translate API 
+
+### 1. Activate Google Translate API (First $300 USD Free)
+
+
+### 2. Install google-cloud-translate
+```bash
+    pip install google-cloud-translate
+```
+
+### 3. 
+
