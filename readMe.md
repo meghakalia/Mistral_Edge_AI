@@ -64,5 +64,8 @@ https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistr
     pip install google-cloud-translate
 ```
 
-### 3. 
+### 3. Run the script
+```bash
+python3 google_translate.py
+```
 
