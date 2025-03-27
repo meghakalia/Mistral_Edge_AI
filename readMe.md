@@ -69,3 +69,13 @@ https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF/resolve/main/mistr
 python3 google_translate.py
 ```
 
+
+## Tips
+
+### Keep your MacBook awake while running scripts
+```bash
+caffeinate -di python your_script.py
+```
+
+
+

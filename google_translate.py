@@ -25,7 +25,7 @@ def translate_text(text, target_language="fr"):
     result = response.json()
     return result['data']['translations'][0]['translatedText']
 
-# Example usage
 text_to_translate = "Hello, how are you?"
-translated = translate_text(text_to_translate, target_language="es")
+translated = translate_text(text_to_translate, target_language="mai") # indian language maithli
 print("Translated text:", translated)
+
