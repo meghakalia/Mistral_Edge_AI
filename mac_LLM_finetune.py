@@ -11,9 +11,17 @@ import mlx.optimizers as optim
 import numpy as np
 from mlx.utils import tree_flatten
 from models import LoRALinear
+import math
+from lora import load, train, evaluate, loss_language_translation
+from lora import generate_translation
 
-from lora import load, loss, train
+parser = build_parser() # build parser  
+args = parser.parse_args() # parse args
 
+args.train = False
+args.test = False
+args.wandb = False
+args.inference = True
 # hf_model_path = "mistralai/Mistral-7B-Instruct-v0.2"
 
 # load quantized model 
@@ -21,8 +29,7 @@ from lora import load, loss, train
 model_path = "/Volumes/FF952/mistral_finetune/mlx-base"
 model, tokenizer = load_mlx(model_path)
 
-parser = build_parser() # build parser  
-args = parser.parse_args() # parse args
+
 
 # Building tokenizer_config
 tokenizer_config = {}
@@ -66,18 +73,19 @@ if args.wandb:
     wandb.login(key=wandb_key)
     run = wandb.init(
         project="mistral_finetune",
-        name="using both eng and mai",
+        name="language_translation_en_mai",
         config=args,
     )
+
 
 if args.train:
     print("Training")
     opt = optim.Adam(learning_rate=args.learning_rate)
     # Train model
     if args.wandb:
-        train(model, train_set, valid_set, opt, loss, tokenizer, args, run)
+        train(model, train_set, valid_set, opt, loss_language_translation, tokenizer, args, run)
     else:
-        train(model, train_set, valid_set, opt, loss, tokenizer, args)
+        train(model, train_set, valid_set, opt, loss_language_translation, tokenizer, args)
 
     # Save adapter weights
     mx.savez(args.adapter_file, **dict(tree_flatten(model.trainable_parameters())))
@@ -85,25 +93,46 @@ if args.train:
     # test
     print("Testing")
 
-# if args.test:
-#         print("Testing")
-#         model.eval()
-#         test_loss = evaluate(
-#             model,
-#             test_set,
-#             loss,
-#             tokenizer,
-#             args.batch_size,
-#             num_batches=args.test_batches,
-#         )
-#         test_ppl = math.exp(test_loss)
 
-#         print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}.")
+if args.test:
+    model.load_weights(args.adapter_file, strict=False)
+    print("Testing")
+    model.eval()
+    test_loss = evaluate(
+        model,
+        test_set,
+        loss,
+        tokenizer,
+        args.batch_size,
+        num_batches=args.test_batches,
+    )
+    test_ppl = math.exp(test_loss)
+    print(f"Test loss {test_loss:.3f}, Test ppl {test_ppl:.3f}.")
 
-#     if args.prompt is not None:
-#         print("Generating")
-#         generate(model, args.prompt, tokenizer, args)
+    # if args.prompt is not None:
+    #     print("Generating")
+    #     generate(model, args.prompt, tokenizer, args)
 
 
+if args.inference: 
+    args.adapter_file = "/Volumes/FF952/mistral_finetune/checkpoints_language_translation/adapters_100.npz"
+    model.load_weights(args.adapter_file, strict=False)
+    print("Original Model")
+    model.eval()
+    
+    print("Generating")
+    # load test sequence: 
 
+    for example in test_set:
+        en = example["en"]
+        mai = example["mai"]
 
+        prompt = f"Translate English to Maithili:\nEnglish: {en}\nMaithili:"
+        # full_text = prompt + " " + mai
+
+        pred = generate_translation(prompt, model, tokenizer, args, max_new_tokens = 50)
+
+        print(f"English: {en}")
+        print(f"Maithili: {mai}")
+        print(f"Prediction: {pred}")
+        print("-" * 10)

@@ -13,7 +13,8 @@ import numpy as np
 import utils as lora_utils
 from mlx.utils import tree_flatten
 from models import LoRALinear
-
+import wandb
+import pandas as pd
 
 def build_parser():
     parser = argparse.ArgumentParser(description="LoRA or QLoRA finetuning.")
@@ -169,6 +170,34 @@ def load(args):
         )
     return train, valid, test
 
+def generate_translation(prompt_text, model, tokenizer, args, max_new_tokens=25):
+    """
+    Generates a translation given an English or Maithili prompt using the finetuned Mistral model.
+    """
+
+    # Tokenize the prompt (no target)
+    input_ids = tokenizer.encode(prompt_text)
+    input_array = mx.array([input_ids])  # [1, seq_len]
+
+    model.eval()
+    generated = input_array
+    for _ in range(max_new_tokens):
+        logits = model(generated)
+        logits = logits[:, -1, :]  # only get the last token's logits
+        next_token = mx.argmax(logits, axis=-1)
+
+        # Append predicted token
+        generated = mx.concatenate([generated, next_token[:, None]], axis=1)
+
+        # Optional: stop generation on EOS or newline etc.
+        if next_token.item() == tokenizer.eos_token_id:
+            break
+
+    output_ids = generated[0].tolist()
+    output_text = tokenizer.decode(output_ids[len(input_ids):])  # only the generated part
+
+    return output_text
+
 
 def loss(model, inputs, targets, lengths):
     # Run model on inputs
@@ -184,6 +213,66 @@ def loss(model, inputs, targets, lengths):
     ntoks = length_mask.sum()
     ce = ce.sum() / ntoks
     return ce, ntoks
+
+def loss_language_translation(model, inputs, targets, lengths):
+    logits = model(inputs)
+    logits = logits.astype(mx.float32)
+
+    # targets are already masked with -100
+    loss_mask = (targets != -100)
+    ce = nn.losses.cross_entropy(logits, targets) * loss_mask
+
+    ntoks = loss_mask.sum()
+    ce = ce.sum() / ntoks
+    return ce, ntoks
+
+
+def iterate_batches_language_translation(dset, tokenizer, batch_size, train=False):
+    while True:
+        indices = np.arange(len(dset))
+        if train:
+            indices = np.random.permutation(indices)
+
+        for i in range(0, len(indices) - batch_size + 1, batch_size):
+            input_batch = []
+            target_batch = []
+            lengths = []
+
+            for j in range(batch_size):
+                example = dset[indices[i + j]]
+                en = example["en"]
+                mai = example["mai"]
+
+                prompt = f"Translate English to Maithili:\nEnglish: {en}\nMaithili:"
+                full_text = prompt + " " + mai
+
+                input_ids = tokenizer.encode(full_text)
+                target_ids = input_ids.copy()
+
+                # Mask everything before the start of the Maithili part
+                prompt_ids = tokenizer.encode(prompt)
+                prompt_len = len(prompt_ids)
+                for k in range(prompt_len):
+                    target_ids[k] = -100  # ignore index for loss masking
+
+                input_batch.append(input_ids)
+                target_batch.append(target_ids)
+                lengths.append(len(input_ids))
+
+            max_len = max(lengths)
+
+            # Pad sequences
+            input_padded = np.zeros((batch_size, max_len), dtype=np.int32)
+            target_padded = np.full((batch_size, max_len), fill_value=-100, dtype=np.int32)
+
+            for j in range(batch_size):
+                input_padded[j, :lengths[j]] = input_batch[j]
+                target_padded[j, :lengths[j]] = target_batch[j]
+
+            yield mx.array(input_padded), mx.array(target_padded), mx.array(lengths)
+
+        if not train:
+            break
 
 
 def iterate_batches(dset, tokenizer, batch_size, train=False):
@@ -227,7 +316,8 @@ def evaluate(model, dataset, loss, tokenizer, batch_size, num_batches):
 
     for it, batch in zip(
         index_iterator,
-        iterate_batches(dataset, tokenizer, batch_size),
+        iterate_batches_language_translation(dataset, tokenizer, batch_size)
+        # iterate_batches(dataset, tokenizer, batch_size),
     ):
         losses, toks = loss(model, *batch)
         all_losses.append((losses * toks).item())
@@ -236,7 +326,7 @@ def evaluate(model, dataset, loss, tokenizer, batch_size, num_batches):
     return np.sum(all_losses) / ntokens
 
 
-def train(model, train_set, val_set, optimizer, loss, tokenizer, args, wandb=None):
+def train(model, train_set, val_set, optimizer, loss, tokenizer, args, run=None):
     # Create value and grad function for loss
     loss_value_and_grad = nn.value_and_grad(model, loss)
 
@@ -247,7 +337,7 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args, wandb=Non
     start = time.perf_counter()
     for it, batch in zip(
         range(args.iters),
-        iterate_batches(train_set, tokenizer, args.batch_size, train=True),
+        iterate_batches_language_translation(train_set, tokenizer, args.batch_size, train=True),
     ):
         # Forward and backward pass
         (lvalue, toks), grad = loss_value_and_grad(model, *batch)
@@ -274,20 +364,20 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args, wandb=Non
             n_tokens = 0
             start = time.perf_counter()
 
-        # if args.prompt is not None:
-        #     print("Generating")
-        #     output = generate(model, args.prompt, tokenizer, args)
+            if args.prompt is not None:
+                print("Generating")
+                output = generate_translation(args.prompt, model, tokenizer, args)
 
             # Log to wandb
             if args.wandb:
-                wandb.log(
+                run.log(
                     {
                         "train_loss": train_loss,
                         "iter": it + 1,
                         "tokens_per_second": float(n_tokens) / (stop - start)
-                        # "output translation": output
                     }
                 )
+                run.log({"results_table": wandb.Table(dataframe=pd.DataFrame([{'output': output}]))})
         
         # Report validation loss if needed
         if it == 0 or (it + 1) % args.steps_per_eval == 0:
@@ -303,7 +393,7 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args, wandb=Non
 
             # Log to wandb
             if args.wandb:
-                wandb.log(
+                run.log(
                     {
                         "val_loss": val_loss,
                         "iter": it + 1,

@@ -8,6 +8,11 @@ def build_parser():
         help="Number of iterations to train for.",
     )
     parser.add_argument(
+        "--inference",
+        action="store_true",
+        help="Do inference",
+    )
+    parser.add_argument(
         "--steps-per-eval",
         default=10, 
         help="Number of training steps between validations.",
@@ -38,8 +43,8 @@ def build_parser():
         "--prompt",
         "-p",
         type=str,
-        help="Translate the english to Maithili: \n English: Have you found any new ways to keep yourself motivated during your workouts? \n Maithili: [your Maithili text] ",
-        default="None",
+        help="The prompt for generation",
+        default="Translate English to Maithili:\nEnglish: What is your name?\nMaithili:"
     )
 
     parser.add_argument(
@@ -57,7 +62,7 @@ def build_parser():
     parser.add_argument(
         "--adapter-file",
         type=str,
-        default="/Volumes/FF952/mistral_finetune/checkpoints/adapters.npz",
+        default="/Volumes/FF952/mistral_finetune/checkpoints_language_translation/adapters.npz",
         help="Save/load path for the trained adapter weights.",
     )
 
