@@ -99,7 +99,7 @@ def build_parser():
     parser.add_argument(
         "--adapter-file",
         type=str,
-        default="adapters.npz",
+        default="/Volumes/FF952/mistral_finetune/checkpoints/adapters.npz",
         help="Save/load path for the trained adapter weights.",
     )
     parser.add_argument(
@@ -128,7 +128,7 @@ class Dataset:
     Light-weight wrapper to hold lines from a jsonl file
     """
 
-    def __init__(self, path: Path, key: str = "text"):
+    def __init__(self, path: Path, key: str = "translation"):
         if not path.exists():
             self._data = None
         else:
@@ -172,7 +172,8 @@ def load(args):
 
 def loss(model, inputs, targets, lengths):
     # Run model on inputs
-    logits, _ = model(inputs)
+    # logits, _ = model(inputs)
+    logits = model(inputs)
     logits = logits.astype(mx.float32)
 
     # Mask padding tokens
@@ -195,7 +196,7 @@ def iterate_batches(dset, tokenizer, batch_size, train=False):
         # Collect batches from dataset
         for i in range(0, len(indices) - batch_size + 1, batch_size):
             # Encode batch
-            batch = [tokenizer.encode(dset[indices[i + j]]) for j in range(batch_size)]
+            batch = [tokenizer.encode((dset[indices[i + j]]['en'], dset[indices[i + j]]['mai'])) for j in range(batch_size)]
             lengths = [len(x) for x in batch]
 
             # Check if any sequence is longer than 2048 tokens
@@ -235,7 +236,7 @@ def evaluate(model, dataset, loss, tokenizer, batch_size, num_batches):
     return np.sum(all_losses) / ntokens
 
 
-def train(model, train_set, val_set, optimizer, loss, tokenizer, args):
+def train(model, train_set, val_set, optimizer, loss, tokenizer, args, wandb=None):
     # Create value and grad function for loss
     loss_value_and_grad = nn.value_and_grad(model, loss)
 
@@ -260,7 +261,7 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args):
         n_tokens += toks.item()
 
         # Report training loss if needed
-        if (it + 1) % args.steps_per_report == 0:
+        if it == 0 or (it + 1) % args.steps_per_report == 0:
             train_loss = np.mean(losses)
 
             stop = time.perf_counter()
@@ -273,6 +274,21 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args):
             n_tokens = 0
             start = time.perf_counter()
 
+        # if args.prompt is not None:
+        #     print("Generating")
+        #     output = generate(model, args.prompt, tokenizer, args)
+
+            # Log to wandb
+            if args.wandb:
+                wandb.log(
+                    {
+                        "train_loss": train_loss,
+                        "iter": it + 1,
+                        "tokens_per_second": float(n_tokens) / (stop - start)
+                        # "output translation": output
+                    }
+                )
+        
         # Report validation loss if needed
         if it == 0 or (it + 1) % args.steps_per_eval == 0:
             stop = time.perf_counter()
@@ -285,12 +301,22 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args):
                 f"Val took {(time.perf_counter() - stop):.3f}s"
             )
 
+            # Log to wandb
+            if args.wandb:
+                wandb.log(
+                    {
+                        "val_loss": val_loss,
+                        "iter": it + 1,
+                        "tokens_per_second": float(n_tokens) / (stop - start),
+                    }
+                )
+
             start = time.perf_counter()
 
         # Save adapter weights if needed
         if (it + 1) % args.save_every == 0:
             mx.savez(
-                args.adapter_file, **dict(tree_flatten(model.trainable_parameters()))
+                f"{args.adapter_file[:-4]}_{it + 1}.npz", **dict(tree_flatten(model.trainable_parameters()))
             )
             print(f"Iter {it + 1}: Saved adapter weights to {args.adapter_file}.")
 
@@ -302,10 +328,7 @@ def generate(model, prompt, tokenizer, args):
 
     tokens = []
     skip = 0
-    for token, n in zip(
-        lora_utils.generate(prompt, model, args.temp),
-        range(args.max_tokens),
-    ):
+    for token in lora_utils.generate(prompt, model, args.temp):
         if token == tokenizer.eos_token_id:
             break
 
@@ -319,6 +342,7 @@ def generate(model, prompt, tokenizer, args):
     if len(tokens) == 0:
         print("No tokens generated for this prompt")
         return
+    return tokenizer.decode(tokens)[skip:]
 
 
 if __name__ == "__main__":

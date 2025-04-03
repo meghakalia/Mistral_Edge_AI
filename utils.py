@@ -193,7 +193,8 @@ def generate(
     y = prompt
     cache = None
     while True:
-        logits, cache = model(y[None], cache=cache)
+        # logits, cache = model(y[None], cache=cache)
+        logits = model(y[None], cache=cache)
         logits = logits[:, -1, :]
         y = sample(logits)
         yield y

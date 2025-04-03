@@ -81,10 +81,28 @@ if __name__ == "__main__":
         default=None,
     )
 
+    parser.add_argument(
+        "--use-local-model",
+        help="whether to use a local model",
+        action="store_true",
+        default=False
+    )
+
+    # parser.add_argument(
+    #     "--mlx-path",
+    #     type=str,
+    #     default="mlx_model",
+    #     help="Path to save the MLX model.",
+    # )
+    
     args = parser.parse_args()
 
     print("[INFO] Loading")
-    weights, config, tokenizer = utils.fetch_from_hub(args.hf_path)
+
+    if args.use_local_model:
+        weights, config, tokenizer = utils.load(args.hf_path)
+    else:
+        weights, config, tokenizer = utils.fetch_from_hub(args.hf_path)
 
     dtype = mx.float16 if args.quantize else getattr(mx, args.dtype)
     weights = {k: v.astype(dtype) for k, v in weights.items()}
