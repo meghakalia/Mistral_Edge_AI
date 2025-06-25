@@ -12,6 +12,30 @@ import models
 import transformers
 from huggingface_hub import snapshot_download
 
+import sacrebleu
+from sentence_transformers import SentenceTransformer, util
+
+# Load semantic similarity model globally
+semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+def compute_bleu(references, hypotheses):
+    """
+    Computes the BLEU score using sacrebleu.
+    Each reference and hypothesis should be a string.
+    """
+    bleu = sacrebleu.corpus_bleu(hypotheses, [references])
+    return bleu.score
+
+def compute_semantic_similarity(references, hypotheses):
+    """
+    Computes average cosine similarity between embeddings of reference and hypothesis translations.
+    """
+    ref_embeddings = semantic_model.encode(references, convert_to_tensor=True)
+    hyp_embeddings = semantic_model.encode(hypotheses, convert_to_tensor=True)
+    cosine_scores = util.cos_sim(ref_embeddings, hyp_embeddings)
+    # Extract diagonal (each hypothesis with its reference)
+    scores = cosine_scores.diag().cpu().numpy()
+    return scores.mean()
 
 def fetch_from_hub(hf_path: str):
     model_path = snapshot_download(

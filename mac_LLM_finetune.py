@@ -18,16 +18,28 @@ from lora import generate_translation
 parser = build_parser() # build parser  
 args = parser.parse_args() # parse args
 
-args.train = False
+args.train = True
 args.test = False
-args.wandb = False
-args.inference = True
+# args.wandb = False
+args.inference = False
 # hf_model_path = "mistralai/Mistral-7B-Instruct-v0.2"
 
 # load quantized model 
 # load from local repo
-model_path = "/Volumes/FF952/mistral_finetune/mlx-base"
+model_path = "/Volumes/FF952/mistral_finetune/mlx-base-new"
 model, tokenizer = load_mlx(model_path)
+
+def print_trainable_params(params, prefix=""):
+    if isinstance(params, dict):
+        for key, val in params.items():
+            print_trainable_params(val, prefix=f"{prefix}.{key}" if prefix else key)
+    elif isinstance(params, list):
+        for idx, val in enumerate(params):
+            print_trainable_params(val, prefix=f"{prefix}[{idx}]")
+    elif isinstance(params, mx.array):  # mx.array from mlx.core
+        print(f"{prefix}: shape={params.shape}, sum={mx.sum(params).item():.4f}, mean={mx.mean(params).item():.4f}")
+    else:
+        print(f"{prefix}: <non-mx.array value>")
 
 
 
@@ -42,8 +54,8 @@ if args.add_eos_token:
 # Freeze all layers other than LORA linears
 model.freeze()
 for l in model.model.layers[len(model.model.layers) - args.lora_layers :]:
-    l.self_attn.q_proj = LoRALinear.from_linear(l.self_attn.q_proj, rank=4) #changed rank to 4
-    l.self_attn.v_proj = LoRALinear.from_linear(l.self_attn.v_proj, rank=4) #changed rank to 4
+    l.self_attn.q_proj = LoRALinear.from_linear(l.self_attn.q_proj, rank=8) #changed rank to 4
+    l.self_attn.v_proj = LoRALinear.from_linear(l.self_attn.v_proj, rank=8) #changed rank to 4
     if hasattr(l, "block_sparse_moe"):
         l.block_sparse_moe.gate = LoRALinear.from_linear(l.block_sparse_moe.gate)
 
@@ -115,20 +127,29 @@ if args.test:
 
 
 if args.inference: 
-    args.adapter_file = "/Volumes/FF952/mistral_finetune/checkpoints_language_translation/adapters_100.npz"
+    args.adapter_file = "/Volumes/FF952/mistral_finetune/checkpoints_language_translation/adapters_200.npz"
     model.load_weights(args.adapter_file, strict=False)
+
+    # Use this to inspect all trainable parameters
+    # print("Trainable parameter values:")
+    # trainables = model.trainable_parameters()
+    # print_trainable_params(trainables)
+
     print("Original Model")
     model.eval()
     
     print("Generating")
     # load test sequence: 
 
-    for example in test_set:
+    for example in train_set:
         en = example["en"]
         mai = example["mai"]
 
         prompt = f"Translate English to Maithili:\nEnglish: {en}\nMaithili:"
         # full_text = prompt + " " + mai
+
+        # output = generate_mlx(model, tokenizer, prompt, max_tokens=200)
+        # print(output)
 
         pred = generate_translation(prompt, model, tokenizer, args, max_new_tokens = 50)
 

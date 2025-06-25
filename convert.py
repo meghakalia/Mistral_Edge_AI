@@ -15,7 +15,9 @@ def quantize(weights, config, args):
 
     # Load the model:
     model = models.Model(models.ModelArgs.from_dict(config))
-    model.load_weights(list(weights.items()))
+    flat_weights = dict(tree_flatten(weights))  # ✅ flatten nested model structure
+    model.load_weights(list(flat_weights.items()))
+    # model.load_weights(list(weights.items()))
 
     # Quantize the model:
     nn.quantize(
@@ -41,19 +43,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--hf-path",
         type=str,
+        default = "/Volumes/FF952/mistral_finetune/base_model",
         help="Path to the Hugging Face model.",
     )
     parser.add_argument(
         "--mlx-path",
         type=str,
-        default="mlx_model",
+        default="/Volumes/FF952/mistral_finetune/mlx-base-new",
         help="Path to save the MLX model.",
     )
     parser.add_argument(
         "-q",
         "--quantize",
         help="Generate a quantized model.",
-        action="store_true",
+        default="store_false",
     )
     parser.add_argument(
         "--q-group-size",
@@ -99,13 +102,20 @@ if __name__ == "__main__":
 
     print("[INFO] Loading")
 
-    if args.use_local_model:
-        weights, config, tokenizer = utils.load(args.hf_path)
-    else:
-        weights, config, tokenizer = utils.fetch_from_hub(args.hf_path)
+    # if args.use_local_model:
+    # weights, config, tokenizer = utils.load(args.hf_path)
+    weights, tokenizer, config = utils.load(args.hf_path)
+    # else:
+    #     weights, config, tokenizer = utils.fetch_from_hub(args.hf_path)
 
     dtype = mx.float16 if args.quantize else getattr(mx, args.dtype)
-    weights = {k: v.astype(dtype) for k, v in weights.items()}
+
+    weights = {
+        k: v.astype(dtype) if isinstance(v, mx.array) else v
+        for k, v in weights.items()
+    }
+
+    # weights = {k: v.astype(dtype) for k, v in weights.items()}
     if args.quantize:
         print("[INFO] Quantizing")
         weights, config = quantize(weights, config, args)

@@ -15,6 +15,13 @@ from mlx.utils import tree_flatten
 from models import LoRALinear
 import wandb
 import pandas as pd
+# from tqdm import islice
+
+import sacrebleu
+from sentence_transformers import SentenceTransformer, util
+
+# Load this globally once (put near top of script)
+semantic_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def build_parser():
     parser = argparse.ArgumentParser(description="LoRA or QLoRA finetuning.")
@@ -307,9 +314,58 @@ def iterate_batches(dset, tokenizer, batch_size, train=False):
             break
 
 
+
+
+def evaluate_bleu_semantic_similarity(model, dataset, loss, tokenizer, batch_size, num_batches):
+    all_losses = []
+    ntokens = 0
+    ref, hyp = None, None  # for single example
+
+    evaluated_bleu = False  # flag to ensure we only do BLEU/sim once
+
+    # num_batches can be -1 to indicate the entire set
+    index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
+
+    for it, batch in zip(
+        index_iterator,
+        iterate_batches_language_translation(dataset, tokenizer, batch_size)
+    ):
+        inputs, targets, lengths = batch
+
+        # Compute loss
+        l, toks = loss(model, inputs, targets, lengths)
+        all_losses.append((l * toks).item())
+        ntokens += toks.item()
+
+        # Generate translation for metrics from just the first sentence
+        if not evaluated_bleu:
+            in_text = tokenizer.decode(inputs[0][:int(lengths[0])].tolist())
+            if "Maithili:" in in_text:
+                en = in_text.split("Maithili:")[0].replace("Translate English to Maithili:\nEnglish:", "").strip()
+                ref = dataset[np.random.randint(len(dataset))]["mai"]
+                hyp = generate_translation(en, model, tokenizer, args=None, max_new_tokens=25)
+                evaluated_bleu = True
+
+    avg_loss = np.sum(all_losses) / ntokens
+
+    if ref is not None and hyp is not None:
+        bleu = sacrebleu.corpus_bleu([hyp], [[ref]]).score
+        sim = util.cos_sim(
+            semantic_model.encode(ref, convert_to_tensor=True),
+            semantic_model.encode(hyp, convert_to_tensor=True)
+        ).item()
+    else:
+        bleu = None
+        sim = None
+
+    return avg_loss, bleu, sim
+
+
 def evaluate(model, dataset, loss, tokenizer, batch_size, num_batches):
     all_losses = []
     ntokens = 0
+
+    refs, hyps = [], []
 
     # num_batches can be -1 to indicate the entire set
     index_iterator = iter(range(num_batches)) if num_batches != -1 else iter(int, 1)
@@ -327,6 +383,11 @@ def evaluate(model, dataset, loss, tokenizer, batch_size, num_batches):
 
 
 def train(model, train_set, val_set, optimizer, loss, tokenizer, args, run=None):
+
+    # Before training loop
+    if args.wandb:
+        results_table = wandb.Table(columns=["step", "output"])
+
     # Create value and grad function for loss
     loss_value_and_grad = nn.value_and_grad(model, loss)
 
@@ -367,6 +428,7 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args, run=None)
             if args.prompt is not None:
                 print("Generating")
                 output = generate_translation(args.prompt, model, tokenizer, args)
+                print(output)
 
             # Log to wandb
             if args.wandb:
@@ -377,18 +439,27 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args, run=None)
                         "tokens_per_second": float(n_tokens) / (stop - start)
                     }
                 )
-                run.log({"results_table": wandb.Table(dataframe=pd.DataFrame([{'output': output}]))})
+
+                # Add new row to the shared table
+                results_table.add_data(it, str(output))  # or time.time() instead of `it` if you prefer timestamp
+                run.log({"results_table": results_table})
+                # results_table.add_data(output)
+                # run.log({"results_table": wandb.Table(dataframe=pd.DataFrame([{'output': output}]))})
         
         # Report validation loss if needed
         if it == 0 or (it + 1) % args.steps_per_eval == 0:
             stop = time.perf_counter()
-            val_loss = evaluate(
-                model, val_set, loss, tokenizer, args.batch_size, args.val_batches
-            )
+            # val_loss = evaluate(
+            #     model, val_set, loss, tokenizer, args.batch_size, args.val_batches
+            # )
+
+            val_loss, bleu, sim = evaluate_bleu_semantic_similarity(model, val_set, loss, tokenizer, args.batch_size, args.val_batches)
             print(
                 f"Iter {it + 1}: "
                 f"Val loss {val_loss:.3f}, "
-                f"Val took {(time.perf_counter() - stop):.3f}s"
+                f"Val took {(time.perf_counter() - stop):.3f}s", 
+                f"Val Bleu {bleu:.3f}, ",
+                f"Val sim {sim:.3f}, "
             )
 
             # Log to wandb
@@ -396,6 +467,8 @@ def train(model, train_set, val_set, optimizer, loss, tokenizer, args, run=None)
                 run.log(
                     {
                         "val_loss": val_loss,
+                        "bleu": bleu, 
+                        "sim_loss": sim, 
                         "iter": it + 1,
                         "tokens_per_second": float(n_tokens) / (stop - start),
                     }

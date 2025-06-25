@@ -20,7 +20,7 @@ def build_parser():
     
     parser.add_argument(
         "--learning-rate",
-        default=1e-5,
+        default=5e-7,
         help="Adam learning rate.",
     )
     parser.add_argument(
@@ -62,7 +62,7 @@ def build_parser():
     parser.add_argument(
         "--adapter-file",
         type=str,
-        default="/Volumes/FF952/mistral_finetune/checkpoints_language_translation/adapters.npz",
+        default="/Volumes/FF952/mistral_finetune_new/checkpoints_language_translation/adapters.npz",
         help="Save/load path for the trained adapter weights.",
     )
 
